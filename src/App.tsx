@@ -60,12 +60,15 @@ export default function App() {
 
   // Update stored data whenever archetype or recommendations change
   useEffect(() => {
-    const updated: StoredAppData = {
-      ...storedData,
-      userType: currentArchetype,
-      recommendedWorks: currentRecommendations,
-    };
-    saveStoredAppData(updated);
+    setStoredData(prev => {
+      const updated: StoredAppData = {
+        ...prev,
+        userType: currentArchetype,
+        recommendedWorks: currentRecommendations,
+      };
+      saveStoredAppData(updated);
+      return updated;
+    });
   }, [currentArchetype, currentRecommendations]);
 
   // Handlers

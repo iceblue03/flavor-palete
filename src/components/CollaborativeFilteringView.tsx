@@ -23,7 +23,7 @@ export const CollaborativeFilteringView: React.FC<CollaborativeFilteringViewProp
       
       {/* Header Banner */}
       <div className="bg-white/80 rounded-3xl p-6 sm:p-8 border border-[#EBE3D5] shadow-xs">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
             <div className="flex items-center space-x-2">
               <span className="px-3 py-1 bg-[#84A98C] text-white rounded-full text-xs font-bold shadow-xs">
@@ -57,9 +57,9 @@ export const CollaborativeFilteringView: React.FC<CollaborativeFilteringViewProp
         
         {/* Left Column: Taste Twin Peer Cards (7 cols) */}
         <div className="lg:col-span-7 space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
             <h3 className="text-base font-bold text-[#333333] flex items-center gap-2">
-              <UserCheck className="w-5 h-5 text-[#84A98C]" />
+              <UserCheck className="w-5 h-5 text-[#84A98C] shrink-0" />
               <span>나와 취향 90% 이상 일치하는 또래 피어들</span>
             </h3>
             <span className="text-xs text-[#888888]">실시간 코사인 유사도 기준</span>
