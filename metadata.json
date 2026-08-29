@@ -1,0 +1,6 @@
+{
+  "name": "취향팔레트 (Taste Palette)",
+  "description": "1020을 위한 나만의 숨겨진 문화 취향 발견 및 협업 필터링 기반 콘텐츠(책, 영화, 웹툰) 추천 서비스",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
