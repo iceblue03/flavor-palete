@@ -66,7 +66,7 @@ export const RecommendationsView: React.FC<RecommendationsViewProps> = ({
       
       {/* Header Banner */}
       <div className="bg-white rounded-3xl p-6 sm:p-8 border border-[#EBE3D5] shadow-xs">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
             <div className="flex items-center space-x-2">
               <span
