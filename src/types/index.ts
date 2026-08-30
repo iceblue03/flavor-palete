@@ -66,16 +66,30 @@ export interface ConsumedWork {
   userNote?: string;
 }
 
+export type PlatformAuthKind = 'oauth' | 'demo';
+
+export interface PlatformActivityItem {
+  id: string;
+  title: string;
+  subtitle?: string; // e.g. YouTube 채널명, Drive 파일 형식
+  url?: string;
+}
+
 export interface PlatformConnection {
   id: string;
   name: string;
   iconName: string;
   category: string;
   color: string;
+  kind: PlatformAuthKind; // 'oauth' = real login-based sync, 'demo' = predefined placeholder data
   connected: boolean;
   itemCount: number;
   lastSyncedAt?: string;
-  previewTitles: string[];
+  accountLabel?: string; // e.g. u/username, Google 채널명
+  previewItems: PlatformActivityItem[];
+  error?: string;
+  /** 미연동 상태일 때 보여주는 한 줄 설명 */
+  description: string;
 }
 
 export interface TasteTwinPeer {
@@ -100,6 +114,33 @@ export interface UserProfileData {
   totalConsumedCount: number;
 }
 
+/** 성향 분석 점수 산출에 기여한 데이터 출처 하나 */
+export interface TasteScoreSource {
+  id: 'onboarding' | 'watched' | 'youtube' | 'drive' | 'x' | 'pinterest';
+  label: string;
+  weight: number;         // 최종 점수 반영 가중치
+  analyzedCount: number;  // 분석한 항목 수
+  matchedCount: number;   // 취향 신호가 실제로 잡힌 항목 수
+  scores: TasteDNAScores; // 이 출처가 산출한 6축 점수
+}
+
+/** 성향 분석 결과 (원본 제목이 아닌 '추출된 수치'만 담습니다) */
+export interface TasteScoreBreakdown {
+  finalScores: TasteDNAScores;
+  sources: TasteScoreSource[];
+  totalAnalyzed: number;
+  /** 데이터가 많고 신호가 뚜렷할수록 높아지는 분석 신뢰도 (0-100) */
+  confidence: number;
+}
+
+/** 온보딩 취향 테스트 결과 (선택한 보기 ID만 저장) */
+export interface OnboardingResult {
+  completed: boolean;
+  completedAt?: string;
+  answers: Record<string, string>; // questionId -> optionId
+  scores?: TasteDNAScores;
+}
+
 export interface StoredAppData {
   // PRD 명시 저장 데이터: 사용자 유형, 식별자, 시청 작품, 추천 작품
   userIdentifier: string;
@@ -108,4 +149,9 @@ export interface StoredAppData {
   recommendedWorks: MediaItem[];
   likedWorkIds: string[];
   syncStatus: Record<string, boolean>;
+  platformConnections: PlatformConnection[];
+  onboarding: OnboardingResult;
+  scoreBreakdown?: TasteScoreBreakdown;
+  /** 첫 방문 시 뜨는 '계정 연동' 팝업을 봤는지 (연동 완료 또는 건너뛰기) */
+  welcomeDismissed: boolean;
 }

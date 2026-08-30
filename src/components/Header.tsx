@@ -112,8 +112,10 @@ export const Header: React.FC<HeaderProps> = ({
           <div className="flex items-center space-x-2 sm:space-x-3">
             {/* Live Sync Status Indicator */}
             <div className="hidden xl:flex items-center gap-2 text-xs font-medium text-[#888888] px-3 py-1.5 bg-[#F5F1EB]/80 rounded-full border border-[#EBE3D5]">
-              <span className="w-2 h-2 rounded-full bg-[#84A98C] animate-pulse"></span>
-              <span>실시간 동기화 활성</span>
+              <span
+                className={`w-2 h-2 rounded-full ${connectedCount > 0 ? 'bg-[#84A98C] animate-pulse' : 'bg-[#D8D0C2]'}`}
+              ></span>
+              <span>{connectedCount > 0 ? '실시간 동기화 활성' : '연동된 플랫폼 없음'}</span>
             </div>
 
             {/* Platform Sync Pill Button */}

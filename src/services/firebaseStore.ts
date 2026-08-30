@@ -1,95 +1,84 @@
-import { ConsumedWork, MediaItem, PlatformConnection, StoredAppData, TasteArchetype, TasteDNAScores } from '../types';
-import { DEFAULT_ARCHETYPE, TASTE_ARCHETYPES } from '../data/archetypesData';
+import { ConsumedWork, OnboardingResult, PlatformConnection, StoredAppData } from '../types';
+import { DEFAULT_ARCHETYPE } from '../data/archetypesData';
 import { ALL_MEDIA_ITEMS } from '../data/contentsData';
+import { ensureAnonymousSignIn, getCurrentUid, isFirebaseConfigured, writeUserDoc } from './firebaseClient';
 
 /**
  * ============================================================================
- * [취향팔레트 - 데이터 저장소 & Firebase Firestore / Auth 인터페이스]
+ * [취향팔레트 - 데이터 저장소 & Firebase Firestore / Auth 연동]
  * ============================================================================
- * PRD 저장 데이터 요구사항:
- * 1. 사용자 식별자 (Identifier / UUID)
+ * 저장 데이터:
+ * 1. 사용자 식별자 (Firebase Auth 익명 uid)
  * 2. 사용자 유형 (User Archetype & Taste DNA)
- * 3. 시청/열람 작품 (Watched Works List with user rating & metadata)
- * 4. 추천 작품 (Recommended Works generated via Collaborative Filtering)
- * 
- * *제약조건 준수: Firebase 연동 위치는 상세한 TODO 주석으로 명시*
+ * 3. 시청/열람 작품 (사용자가 직접 등록한 감상 기록)
+ * 4. 추천 작품 (협업 필터링 결과) / 성향 분석 점수
+ *
+ * ★ 저장 정책 ★
+ * - 회원 정보와 '추출된 분석 결과'만 Firestore에 저장합니다.
+ * - YouTube 영상 제목, Drive 파일명 등 API 원본 데이터는 저장하지 않습니다.
+ *   (해당 원본은 브라우저 메모리/localStorage에만 머무르고, tasteScoring.ts에서
+ *    점수와 개수로 환산된 뒤 그 숫자만 서버로 올라갑니다.)
+ * - OAuth 액세스 토큰도 절대 저장하지 않습니다.
+ * 실제 필터링은 아래 buildFirestorePayload()가 화이트리스트 방식으로 수행합니다.
  * ============================================================================
  */
-
-// TODO: [Firebase Auth] Initialize Firebase Auth instance
-// import { getAuth, signInAnonymously, onAuthStateChanged, User } from 'firebase/auth';
-// const auth = getAuth(firebaseApp);
-
-// TODO: [Firebase Firestore] Initialize Cloud Firestore database instance
-// import { getFirestore, doc, setDoc, getDoc, collection, query, where, getDocs, updateDoc, arrayUnion } from 'firebase/firestore';
-// const db = getFirestore(firebaseApp);
 
 const LOCAL_STORAGE_KEY = 'taste_palette_app_data_v1';
 
 // 기본 플랫폼 연동 초기 데이터
+// 넷플릭스/왓챠/CGV 등 기존 OTT 카드는 실제로 연동 가능한 공개 API가 없어 전부 제거했습니다.
+// YouTube·Google Drive는 동일한 Google 계정 로그인 한 번으로 연동됩니다.
+// X(트위터)와 Pinterest는 둘 다 무료 API로 일반 사용자 데이터를 읽을 수 없어
+// (X: 유료 Basic 플랜 월 $200~ / Pinterest: 앱 심사 통과 전엔 개발자 본인 계정만 연동)
+// 예시 데이터 토글로 제공합니다. 모든 카드는 동일한 토글 UI로 통일했습니다.
 export const INITIAL_PLATFORMS: PlatformConnection[] = [
   {
-    id: 'netflix',
-    name: '넷플릭스',
-    iconName: 'Film',
-    category: 'OTT / 영화·드라마',
-    color: '#E50914',
-    connected: true,
-    itemCount: 42,
-    lastSyncedAt: '2026-08-29 19:40',
-    previewTitles: ['애프터썬', '소공녀', '서치', '디스토피아 2077'],
-  },
-  {
-    id: 'naver-webtoon',
-    name: '네이버 웹툰',
-    iconName: 'Palette',
-    category: '웹툰 / 만화',
-    color: '#00DC64',
-    connected: true,
-    itemCount: 89,
-    lastSyncedAt: '2026-08-29 20:15',
-    previewTitles: ['숲속의 담', '고래별', '미래의 골동품 가게', '스피릿 핑거스'],
-  },
-  {
-    id: 'ridi',
-    name: '리디북스 & 밀리의서재',
-    iconName: 'BookOpen',
-    category: '도서 / 전자책',
-    color: '#1F8CE6',
-    connected: true,
-    itemCount: 23,
-    lastSyncedAt: '2026-08-29 18:30',
-    previewTitles: ['우리가 빛의 속도로 갈 수 없다면', '천 개의 파랑', '달까지 가자'],
-  },
-  {
-    id: 'watcha',
-    name: '왓챠피디아 (Watcha)',
-    iconName: 'Star',
-    category: '영화 / 평점 아카이브',
-    color: '#FF0558',
+    id: 'youtube',
+    name: 'YouTube',
+    iconName: 'Youtube',
+    category: '영상 / 좋아요·시청기록',
+    color: '#FF0000',
+    kind: 'oauth',
     connected: false,
     itemCount: 0,
-    previewTitles: ['평점 데이터 120건 연동 가능'],
+    previewItems: [],
+    description: '좋아요 표시한 동영상을 가져옵니다',
   },
   {
-    id: 'spotify',
-    name: '스포티파이 (Spotify)',
-    iconName: 'Music',
-    category: '음악 / OST',
-    color: '#1DB954',
+    id: 'drive',
+    name: 'Google Drive',
+    iconName: 'HardDrive',
+    category: '문서 / 전자책·PDF',
+    color: '#1A73E8',
+    kind: 'oauth',
     connected: false,
     itemCount: 0,
-    previewTitles: ['새벽 인디 & 감성 플레이리스트 연동'],
+    previewItems: [],
+    description: '최근 문서·PDF 제목만 읽습니다 (내용 미열람)',
   },
   {
-    id: 'cgv',
-    name: 'CGV / 메가박스 / 롯데시네마',
-    iconName: 'Ticket',
-    category: '영화관 / 관람이력',
-    color: '#FB4357',
+    id: 'x',
+    name: 'X (Twitter)',
+    iconName: 'Twitter',
+    category: '소셜 / 좋아요한 글',
+    color: '#000000',
+    kind: 'demo',
     connected: false,
     itemCount: 0,
-    previewTitles: ['티켓 영수증 및 실관람 이력'],
+    previewItems: [],
+    description: '무료 API로는 읽기가 불가능해 예시 데이터로 제공해요',
+  },
+  {
+    id: 'pinterest',
+    name: 'Pinterest',
+    iconName: 'Image',
+    category: '이미지 저장 / 핀보드',
+    color: '#E60023',
+    kind: 'demo',
+    connected: false,
+    itemCount: 0,
+    previewItems: [],
+    description: '앱 심사 전에는 본인 계정만 연동 가능해 예시 데이터로 제공해요',
   },
 ];
 
@@ -158,6 +147,22 @@ export function loadStoredAppData(): StoredAppData {
     const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
+      // 이전 버전 로컬 데이터 마이그레이션: 넷플릭스 등 가짜 플랫폼 목록을 쓰던
+      // 세션에서 넘어온 경우 platformConnections가 없으므로 기본값으로 채움.
+      const knownIds = INITIAL_PLATFORMS.map(p => p.id).join(',');
+      const storedIds = Array.isArray(parsed.platformConnections)
+        ? parsed.platformConnections.map((p: PlatformConnection) => p.id).join(',')
+        : '';
+      if (storedIds !== knownIds) {
+        parsed.platformConnections = INITIAL_PLATFORMS;
+        parsed.syncStatus = { youtube: false, drive: false, x: false, pinterest: false };
+      }
+      if (!parsed.onboarding) {
+        parsed.onboarding = { completed: false, answers: {} };
+      }
+      if (typeof parsed.welcomeDismissed !== 'boolean') {
+        parsed.welcomeDismissed = false;
+      }
       return parsed;
     }
   } catch (err) {
@@ -175,18 +180,107 @@ export function loadStoredAppData(): StoredAppData {
     recommendedWorks: ALL_MEDIA_ITEMS.slice(0, 8),
     likedWorkIds: ['movie-01', 'webtoon-01', 'book-05', 'webtoon-06'],
     syncStatus: {
-      'netflix': true,
-      'naver-webtoon': true,
-      'ridi': true,
-      'watcha': false,
-      'spotify': false,
-      'cgv': false,
+      youtube: false,
+      drive: false,
+      x: false,
+      pinterest: false,
     },
+    platformConnections: INITIAL_PLATFORMS,
+    onboarding: { completed: false, answers: {} },
+    welcomeDismissed: false,
   };
 
   saveStoredAppData(initialData);
   return initialData;
 }
+
+/**
+ * ★ 저장 화이트리스트 ★
+ * Firestore로 보낼 필드를 여기서 명시적으로 골라 담습니다. 이 함수를 거치지
+ * 않은 값은 서버로 전송되지 않으므로, API 원본 데이터(영상 제목·파일명)와
+ * 액세스 토큰이 새어나가지 않도록 보장하는 마지막 방어선입니다.
+ */
+export function buildFirestorePayload(data: StoredAppData, uid: string) {
+  return {
+    // 1. 회원 식별자
+    userId: uid,
+    localIdentifier: data.userIdentifier,
+
+    // 2. 사용자 유형 (분석 결과)
+    userType: {
+      id: data.userType.id,
+      name: data.userType.name,
+      badge: data.userType.badge,
+      primaryColor: data.userType.primaryColor,
+      trendResistanceScore: data.userType.trendResistanceScore,
+      dnaScores: data.userType.dnaScores,
+    },
+
+    // 3. 성향 분석 점수 (원본이 아닌 '추출된 수치'만)
+    scoreBreakdown: data.scoreBreakdown
+      ? {
+          finalScores: data.scoreBreakdown.finalScores,
+          totalAnalyzed: data.scoreBreakdown.totalAnalyzed,
+          confidence: data.scoreBreakdown.confidence,
+          sources: data.scoreBreakdown.sources.map(s => ({
+            id: s.id,
+            weight: s.weight,
+            analyzedCount: s.analyzedCount,
+            matchedCount: s.matchedCount,
+            scores: s.scores,
+          })),
+        }
+      : null,
+
+    // 4. 온보딩 취향 테스트 (선택한 보기 ID만)
+    onboarding: {
+      completed: data.onboarding.completed,
+      completedAt: data.onboarding.completedAt ?? null,
+      answers: data.onboarding.answers,
+    },
+
+    // 5. 사용자가 직접 등록한 감상 기록 (본인 소유 데이터)
+    watchedWorks: data.watchedWorks.map(w => ({
+      id: w.id,
+      mediaItemId: w.mediaItemId,
+      title: w.title,
+      category: w.category,
+      creator: w.creator,
+      userRating: w.userRating,
+      reviewedAt: w.reviewedAt,
+      sourcePlatform: w.sourcePlatform ?? null,
+      tags: w.tags,
+    })),
+    likedWorkIds: data.likedWorkIds,
+    recommendedWorkIds: data.recommendedWorks.slice(0, 20).map(m => m.id),
+
+    // 6. 플랫폼 연동 요약 (연동 여부와 건수만 — previewItems·토큰 제외)
+    platformSummary: data.platformConnections.map(p => ({
+      id: p.id,
+      connected: p.connected,
+      itemCount: p.itemCount,
+      lastSyncedAt: p.lastSyncedAt ?? null,
+    })),
+  };
+}
+
+/** Firestore 쓰기는 실패해도 앱 동작을 막지 않도록 조용히 처리 */
+async function syncToFirestore(data: StoredAppData): Promise<void> {
+  if (!isFirebaseConfigured()) return;
+  try {
+    const user = await ensureAnonymousSignIn();
+    const uid = user?.uid ?? getCurrentUid();
+    if (!uid) return;
+
+    await writeUserDoc(uid, buildFirestorePayload(data, uid));
+  } catch (err) {
+    console.error('[Firebase Firestore] 사용자 문서 동기화 실패:', err);
+  }
+}
+
+// 저장은 자주 일어나므로 쓰기를 묶어 Firestore 호출 횟수를 줄입니다.
+let syncTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingData: StoredAppData | null = null;
 
 export function saveStoredAppData(data: StoredAppData): void {
   try {
@@ -195,38 +289,16 @@ export function saveStoredAppData(data: StoredAppData): void {
     console.error('Failed to persist to localStorage', err);
   }
 
-  // =========================================================================
-  // TODO: [Firebase Firestore Integration Point]
-  // =========================================================================
-  // try {
-  //   const userDocRef = doc(db, 'users', data.userIdentifier);
-  //   await setDoc(userDocRef, {
-  //     userId: data.userIdentifier,
-  //     userType: {
-  //       id: data.userType.id,
-  //       name: data.userType.name,
-  //       dnaScores: data.userType.dnaScores,
-  //       primaryColor: data.userType.primaryColor,
-  //       trendResistanceScore: data.userType.trendResistanceScore,
-  //     },
-  //     syncStatus: data.syncStatus,
-  //     likedWorkIds: data.likedWorkIds,
-  //     updatedAt: new Date().toISOString(),
-  //   }, { merge: true });
-  //   
-  //   // TODO: [Firebase Firestore Subcollection] Sync watched works
-  //   // for (const work of data.watchedWorks) {
-  //   //   await setDoc(doc(db, `users/${data.userIdentifier}/watched_works`, work.id), work);
-  //   // }
-  //   
-  //   // TODO: [Firebase Firestore Subcollection] Sync recommended works
-  //   // for (const item of data.recommendedWorks) {
-  //   //   await setDoc(doc(db, `users/${data.userIdentifier}/recommended_works`, item.id), item);
-  //   // }
-  // } catch (firebaseErr) {
-  //   console.error('[Firebase Firestore] Error synchronizing user document:', firebaseErr);
-  // }
-  // =========================================================================
+  if (!isFirebaseConfigured()) return;
+
+  pendingData = data;
+  if (syncTimer) clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => {
+    syncTimer = null;
+    const snapshot = pendingData;
+    pendingData = null;
+    if (snapshot) void syncToFirestore(snapshot);
+  }, 1200);
 }
 
 /**
@@ -249,11 +321,6 @@ export function addWatchedWorkToStore(
   };
 
   saveStoredAppData(updatedData);
-
-  // TODO: [Firebase Firestore] Add single document to subcollection
-  // const workRef = doc(db, `users/${currentData.userIdentifier}/watched_works`, newWork.id);
-  // await setDoc(workRef, newWork);
-
   return updatedData;
 }
 
@@ -272,10 +339,48 @@ export function toggleLikeWorkInStore(mediaId: string, currentData: StoredAppDat
   };
 
   saveStoredAppData(updatedData);
+  return updatedData;
+}
 
-  // TODO: [Firebase Firestore] Update liked works array in user doc
-  // const userDocRef = doc(db, 'users', currentData.userIdentifier);
-  // await updateDoc(userDocRef, { likedWorkIds: updatedLiked });
+/**
+ * 온보딩 취향 테스트 결과 저장
+ */
+export function saveOnboardingResultToStore(
+  result: OnboardingResult,
+  currentData: StoredAppData
+): StoredAppData {
+  const updatedData: StoredAppData = { ...currentData, onboarding: result };
+  saveStoredAppData(updatedData);
+  return updatedData;
+}
 
+/**
+ * 첫 방문 '계정 연동' 팝업을 닫음 (연동 성공 또는 건너뛰기 모두 호출)
+ */
+export function dismissWelcomeInStore(currentData: StoredAppData): StoredAppData {
+  const updatedData: StoredAppData = { ...currentData, welcomeDismissed: true };
+  saveStoredAppData(updatedData);
+  return updatedData;
+}
+
+/**
+ * 플랫폼 연동 상태 및 실제 동기화된 활동 데이터 갱신 (토큰 자체는 저장하지 않음)
+ */
+export function updatePlatformConnectionsInStore(
+  platforms: PlatformConnection[],
+  currentData: StoredAppData
+): StoredAppData {
+  const syncStatus: Record<string, boolean> = {};
+  platforms.forEach(p => {
+    syncStatus[p.id] = p.connected;
+  });
+
+  const updatedData: StoredAppData = {
+    ...currentData,
+    platformConnections: platforms,
+    syncStatus,
+  };
+
+  saveStoredAppData(updatedData);
   return updatedData;
 }
