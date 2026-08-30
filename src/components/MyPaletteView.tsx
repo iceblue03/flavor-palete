@@ -35,7 +35,7 @@ export const MyPaletteView: React.FC<MyPaletteViewProps> = ({
       
       {/* Top User Identifier & Archetype Summary Card (PRD Saved Data View) */}
       <div className="bg-white rounded-3xl p-6 sm:p-8 border border-[#EBE3D5] shadow-xs">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
           <div className="flex items-start space-x-4">
             <div
               className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl flex items-center justify-center text-white text-2xl font-bold shadow-xs shrink-0"
@@ -144,7 +144,7 @@ export const MyPaletteView: React.FC<MyPaletteViewProps> = ({
       {/* SubTab 1: Watched / Consumed Works */}
       {activeSubTab === 'watched' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
             <h3 className="text-base font-bold text-[#333333]">
               내 감상 아카이브 ({storedData.watchedWorks.length}편)
             </h3>
@@ -215,7 +215,7 @@ export const MyPaletteView: React.FC<MyPaletteViewProps> = ({
       {/* SubTab 2: Liked / Bookmarked Recommendations */}
       {activeSubTab === 'liked' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
             <h3 className="text-base font-bold text-[#333333]">
               내가 찜한 맞춤 추천작 ({likedMediaItems.length}편)
             </h3>

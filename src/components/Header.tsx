@@ -30,32 +30,32 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex items-center justify-between h-16 sm:h-20">
           
           {/* Logo & Service Branding */}
-          <div className="flex items-center space-x-3 cursor-pointer" onClick={() => setActiveTab('analysis')}>
+          <div className="flex items-center space-x-2 sm:space-x-3 cursor-pointer min-w-0 shrink" onClick={() => setActiveTab('analysis')}>
             <div
-              className="w-10 h-10 sm:w-11 sm:h-11 rounded-full flex items-center justify-center shadow-xs transition-transform hover:scale-105"
+              className="w-9 h-9 sm:w-10 sm:h-10 lg:w-11 lg:h-11 rounded-full flex items-center justify-center shadow-xs transition-transform hover:scale-105 shrink-0"
               style={{
                 background: `linear-gradient(135deg, ${archetype.primaryColor}, ${archetype.secondaryColor})`,
               }}
             >
-              <Palette className="w-5 h-5 text-white" />
+              <Palette className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center space-x-2">
-                <span className="text-xl sm:text-2xl font-bold tracking-tight text-[#333333] font-['Outfit',sans-serif]">
+                <span className="text-base sm:text-xl lg:text-2xl font-bold tracking-tight text-[#333333] font-['Outfit',sans-serif] truncate">
                   취향팔레트
                 </span>
-                <span className="px-2.5 py-0.5 text-[10px] font-bold rounded-full bg-[#E8F3EB] text-[#4A7C59] border border-[#84A98C]/30">
+                <span className="hidden sm:inline-block shrink-0 px-2.5 py-0.5 text-[10px] font-bold rounded-full bg-[#E8F3EB] text-[#4A7C59] border border-[#84A98C]/30">
                   1020 컬처 DNA
                 </span>
               </div>
-              <p className="text-xs text-[#888888] hidden sm:block font-medium">
+              <p className="text-xs text-[#888888] hidden lg:block font-medium">
                 유행에 휩쓸리지 않는 나만의 책 · 영화 · 웹툰 숨은 명작 발견기
               </p>
             </div>
           </div>
 
           {/* Center Navigation Tabs */}
-          <nav className="hidden md:flex items-center space-x-1 bg-[#F5F1EB] p-1.5 rounded-2xl border border-[#EBE3D5]">
+          <nav className="hidden xl:flex items-center space-x-1 bg-[#F5F1EB] p-1.5 rounded-2xl border border-[#EBE3D5] shrink-0">
             <button
               onClick={() => setActiveTab('analysis')}
               className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
@@ -102,14 +102,14 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <BookMarked className="w-4 h-4 text-[#4A7C59]" />
               <span>나의 보관함</span>
-              <span className="ml-1 px-1.5 py-0.2 bg-[#EBE3D5] text-[#7C7469] rounded-full text-[11px] font-bold">
+              <span className="ml-1 px-1.5 py-0.5 bg-[#EBE3D5] text-[#7C7469] rounded-full text-[11px] font-bold">
                 {watchedCount}
               </span>
             </button>
           </nav>
 
           {/* Right Actions: Platform Sync Pill & Firebase Status Button */}
-          <div className="flex items-center space-x-2 sm:space-x-3">
+          <div className="flex items-center space-x-2 sm:space-x-3 shrink-0">
             {/* Live Sync Status Indicator */}
             <div className="hidden xl:flex items-center gap-2 text-xs font-medium text-[#888888] px-3 py-1.5 bg-[#F5F1EB]/80 rounded-full border border-[#EBE3D5]">
               <span
@@ -144,8 +144,8 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Mobile Navigation Row */}
-        <div className="flex md:hidden overflow-x-auto py-2 space-x-1 border-t border-[#EBE3D5] no-scrollbar">
+        {/* Compact Navigation Row (shown on mobile & tablet, until the full desktop nav fits at xl) */}
+        <div className="flex xl:hidden overflow-x-auto py-2 space-x-1 border-t border-[#EBE3D5] no-scrollbar">
           <button
             onClick={() => setActiveTab('analysis')}
             className={`shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold ${
