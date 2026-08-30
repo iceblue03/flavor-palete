@@ -338,7 +338,6 @@ export default function App() {
         archetype={currentArchetype}
         platforms={platforms}
         onOpenSyncModal={() => setIsSyncModalOpen(true)}
-        onOpenFirebaseModal={() => setIsFirebaseModalOpen(true)}
         storedData={storedData}
       />
 
