@@ -87,17 +87,21 @@ export function ensureAnonymousSignIn(): Promise<User | null> {
         resolve(user);
       };
 
+      let anonymousAttempted = false;
       const unsubscribe = onAuthStateChanged(auth, user => {
         if (user) {
           unsubscribe();
           finish(user);
+          return;
         }
-      });
-
-      signInAnonymously(auth).catch(err => {
-        console.error('[Firebase Auth] 익명 로그인에 실패했습니다.', err);
-        unsubscribe();
-        finish(null);
+        if (!anonymousAttempted) {
+          anonymousAttempted = true;
+          signInAnonymously(auth).catch(err => {
+            console.error('[Firebase Auth] 익명 로그인에 실패했습니다.', err);
+            unsubscribe();
+            finish(null);
+          });
+        }
       });
 
       // 네트워크가 막혀 있어도 앱이 멈추지 않도록 타임아웃
@@ -113,6 +117,45 @@ export function ensureAnonymousSignIn(): Promise<User | null> {
 
 export function getCurrentUid(): string | null {
   return handles?.auth.currentUser?.uid ?? null;
+}
+
+/** Google OAuth access token으로 익명 사용자를 영구 Google 계정에 연결합니다. */
+export async function connectFirebaseWithGoogle(accessToken: string): Promise<User | null> {
+  const loaded = await loadFirebase();
+  if (!loaded) return null;
+  const {
+    GoogleAuthProvider,
+    linkWithCredential,
+    signInWithCredential,
+  } = await import('firebase/auth');
+  const credential = GoogleAuthProvider.credential(null, accessToken);
+  const current = loaded.auth.currentUser ?? await ensureAnonymousSignIn();
+
+  if (current?.isAnonymous) {
+    try {
+      const linked = await linkWithCredential(current, credential);
+      signInPromise = Promise.resolve(linked.user);
+      return linked.user;
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      // 다른 기기에서 이미 연결된 Google 계정이면 그 기존 계정으로 로그인합니다.
+      if (code !== 'auth/credential-already-in-use' && code !== 'auth/email-already-in-use') {
+        throw error;
+      }
+    }
+  }
+
+  const signedIn = await signInWithCredential(loaded.auth, credential);
+  signInPromise = Promise.resolve(signedIn.user);
+  return signedIn.user;
+}
+
+export async function readUserDoc(uid: string): Promise<Record<string, unknown> | null> {
+  const loaded = await loadFirebase();
+  if (!loaded) return null;
+  const { doc, getDoc } = await import('firebase/firestore');
+  const snapshot = await getDoc(doc(loaded.db, 'users', uid));
+  return snapshot.exists() ? snapshot.data() : null;
 }
 
 /**

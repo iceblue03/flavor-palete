@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Sparkles, ArrowRight, RefreshCw, Share2, Check, Flame, ShieldAlert, Heart, BookmarkCheck, SlidersHorizontal, BookOpen, Film, Palette } from 'lucide-react';
-import { TasteArchetype, TasteDNAScores, StoredAppData, MediaItem } from '../types';
+import { TasteArchetype, TasteDNAScores, StoredAppData, MediaItem, TasteConfidenceIntervals } from '../types';
 import { TasteRadarChart } from './TasteRadarChart';
 
 interface TasteAnalysisViewProps {
@@ -12,6 +12,8 @@ interface TasteAnalysisViewProps {
   onOpenSyncModal: () => void;
   onUpdateDnaScores: (newScores: TasteDNAScores) => void;
   onSelectMedia: (item: MediaItem) => void;
+  confidenceIntervals?: TasteConfidenceIntervals;
+  totalAnalyzed: number;
 }
 
 export const TasteAnalysisView: React.FC<TasteAnalysisViewProps> = ({
@@ -23,6 +25,8 @@ export const TasteAnalysisView: React.FC<TasteAnalysisViewProps> = ({
   onOpenSyncModal,
   onUpdateDnaScores,
   onSelectMedia,
+  confidenceIntervals,
+  totalAnalyzed,
 }) => {
   const [copied, setCopied] = useState(false);
   const [isAdjusting, setIsAdjusting] = useState(false);
@@ -56,7 +60,7 @@ export const TasteAnalysisView: React.FC<TasteAnalysisViewProps> = ({
                 1020 취향 해방구
               </span>
               <span className="text-xs text-[#888888]">
-                연동 데이터 {storedData.watchedWorks.length}건 정밀 분석 완료
+                실제 연동·입력 데이터 {totalAnalyzed}건 분석 완료
               </span>
             </div>
             <h1 className="text-lg sm:text-xl font-bold text-[#333333] mt-1">
@@ -228,6 +232,7 @@ export const TasteAnalysisView: React.FC<TasteAnalysisViewProps> = ({
                 primaryColor={archetype.primaryColor}
                 secondaryColor={archetype.secondaryColor}
                 size={270}
+                confidenceIntervals={confidenceIntervals}
               />
             </div>
 

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Header } from './components/Header';
 import { TasteAnalysisView } from './components/TasteAnalysisView';
 import { RecommendationsView } from './components/RecommendationsView';
@@ -25,9 +25,20 @@ import {
   saveOnboardingResultToStore,
   dismissWelcomeInStore,
   INITIAL_PLATFORMS,
+  restoreStoredAppData,
+  setFirestoreSyncEnabled,
 } from './services/firebaseStore';
-import { ensureAnonymousSignIn, isFirebaseConfigured } from './services/firebaseClient';
+import {
+  connectFirebaseWithGoogle,
+  ensureAnonymousSignIn,
+  isFirebaseConfigured,
+  readUserDoc,
+} from './services/firebaseClient';
 import { computeTasteScore, computeTrendResistance } from './services/tasteScoring';
+import {
+  analyzePlatformSemantics,
+  SemanticAnalysisByPlatform,
+} from './services/analysis/semanticTaste';
 import {
   determineUserArchetype,
   runCollaborativeFiltering,
@@ -47,6 +58,7 @@ import {
   requestGoogleToken,
   getStoredGoogleToken,
   hasGrantedScope,
+  hasGoogleIdentityScopes,
   revokeScope,
   fetchYoutubeActivity,
   fetchDriveActivity,
@@ -68,6 +80,7 @@ function nowLabel(): string {
 export default function App() {
   // 1. Initial State from Store
   const [storedData, setStoredData] = useState<StoredAppData>(() => loadStoredAppData());
+  const storedDataRef = useRef(storedData);
   const [platforms, setPlatforms] = useState<PlatformConnection[]>(
     () => storedData.platformConnections ?? INITIAL_PLATFORMS
   );
@@ -84,17 +97,96 @@ export default function App() {
   const [isWelcomeOpen, setIsWelcomeOpen] = useState(() => !storedData.welcomeDismissed);
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
   const [firebaseUid, setFirebaseUid] = useState<string | null>(null);
+  const [firebaseEmail, setFirebaseEmail] = useState<string | null>(null);
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<'loading' | 'synced' | 'error' | 'disabled'>(
+    isFirebaseConfigured() ? 'loading' : 'disabled'
+  );
+  const [cloudScoreSnapshot, setCloudScoreSnapshot] = useState<StoredAppData['scoreBreakdown']>(
+    storedData.scoreBreakdown
+  );
+
+  useEffect(() => {
+    storedDataRef.current = storedData;
+  }, [storedData]);
+
+  const restoreCloudUser = useCallback(async (uid: string, email: string | null) => {
+    setCloudSyncStatus('loading');
+    try {
+      const cloudPayload = await readUserDoc(uid);
+      const restored = cloudPayload
+        ? restoreStoredAppData(storedDataRef.current, cloudPayload)
+        : storedDataRef.current;
+      storedDataRef.current = restored;
+      setStoredData(restored);
+      setCloudScoreSnapshot(restored.scoreBreakdown);
+      setPlatforms(restored.platformConnections);
+      setFirebaseUid(uid);
+      setFirebaseEmail(email);
+      setFirestoreSyncEnabled(true);
+      saveStoredAppData(restored);
+      setCloudSyncStatus('synced');
+    } catch (error) {
+      console.error('[Firebase] 클라우드 데이터 복원 실패:', error);
+      setFirestoreSyncEnabled(true);
+      saveStoredAppData(storedDataRef.current);
+      setCloudSyncStatus('error');
+    }
+  }, []);
 
   // 2. 성향 분석 점수: 테스트 응답 + 보관함 + 연동 플랫폼을 가중 합산
   const [customDnaScores, setCustomDnaScores] = useState<TasteDNAScores | null>(null);
+  const [semanticByPlatform, setSemanticByPlatform] = useState<SemanticAnalysisByPlatform>({});
+  const [semanticStatus, setSemanticStatus] = useState<'idle' | 'loading' | 'ready' | 'fallback'>('idle');
+  const [semanticError, setSemanticError] = useState<string | null>(null);
+
+  const semanticFingerprint = useMemo(() => JSON.stringify(platforms.map(platform => ({
+    id: platform.id,
+    connected: platform.connected,
+    items: platform.previewItems.map(item => [item.id, item.title, item.subtitle]),
+  }))), [platforms]);
+
+  useEffect(() => {
+    const hasItems = platforms.some(platform => platform.connected && platform.previewItems.length > 0);
+    if (!hasItems) {
+      setSemanticByPlatform({});
+      setSemanticStatus('idle');
+      setSemanticError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setSemanticStatus('loading');
+    setSemanticError(null);
+    analyzePlatformSemantics(platforms)
+      .then(result => {
+        if (cancelled) return;
+        setSemanticByPlatform(result);
+        setSemanticStatus(Object.keys(result).length > 0 ? 'ready' : 'fallback');
+      })
+      .catch(error => {
+        if (cancelled) return;
+        setSemanticByPlatform({});
+        setSemanticStatus('fallback');
+        setSemanticError(error instanceof Error ? error.message : 'AI 의미 분석을 사용할 수 없습니다.');
+      });
+    return () => { cancelled = true; };
+    // 플랫폼의 실제 분석 입력이 달라질 때만 다시 호출합니다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [semanticFingerprint]);
 
   const scoreBreakdown = useMemo(() => {
-    return computeTasteScore({
+    const liveBreakdown = computeTasteScore({
       onboarding: storedData.onboarding,
       watchedWorks: storedData.watchedWorks,
       platforms,
+      semanticByPlatform,
     });
-  }, [storedData.onboarding, storedData.watchedWorks, platforms]);
+    const hasLivePlatformData = platforms.some(platform => platform.previewItems.length > 0);
+    // 다른 기기에서 원본 Google 항목을 다시 받기 전에는 마지막 클라우드 분석을 보여줍니다.
+    return !hasLivePlatformData && (cloudScoreSnapshot?.totalAnalyzed ?? 0) > 0
+      ? cloudScoreSnapshot!
+      : liveBreakdown;
+  }, [storedData.onboarding, storedData.watchedWorks, platforms, semanticByPlatform, cloudScoreSnapshot]);
 
   const currentDnaScores = useMemo<TasteDNAScores>(() => {
     if (customDnaScores) return customDnaScores;
@@ -135,11 +227,15 @@ export default function App() {
     });
   }, [currentArchetype, currentRecommendations, scoreBreakdown]);
 
-  // Firebase 익명 로그인 — 회원 식별자(uid)를 발급받아 저장에 사용
+  // 기존 Firebase 세션(익명 또는 Google)을 복원한 뒤에만 쓰기를 허용합니다.
   useEffect(() => {
     if (!isFirebaseConfigured()) return;
-    ensureAnonymousSignIn().then(user => setFirebaseUid(user?.uid ?? null));
-  }, []);
+    setFirestoreSyncEnabled(false);
+    ensureAnonymousSignIn().then(user => {
+      if (user) void restoreCloudUser(user.uid, user.email);
+      else setCloudSyncStatus('error');
+    });
+  }, [restoreCloudUser]);
 
   // Handlers
   const handleToggleLike = useCallback((mediaId: string) => {
@@ -147,6 +243,7 @@ export default function App() {
   }, []);
 
   const handleAddWatchedWork = useCallback((media: MediaItem | Omit<ConsumedWork, 'id' | 'reviewedAt'>) => {
+    setCloudScoreSnapshot(undefined);
     if ('categoryLabel' in media) {
       // MediaItem passed
       const work: Omit<ConsumedWork, 'id' | 'reviewedAt'> = {
@@ -168,6 +265,10 @@ export default function App() {
   }, []);
 
   const patchPlatform = useCallback((id: string, patch: Partial<PlatformConnection>) => {
+    // 계정 데이터가 바뀌면 과거의 수동 슬라이더 값보다 새 분석 결과를 우선합니다.
+    if ('previewItems' in patch || 'connected' in patch) {
+      setCustomDnaScores(null);
+    }
     setPlatforms(prev => {
       const next = prev.map(p => (p.id === id ? { ...p, ...patch } : p));
       setStoredData(current => updatePlatformConnectionsInStore(next, current));
@@ -218,14 +319,28 @@ export default function App() {
     try {
       // 이미 로그인돼 해당 권한까지 있으면 동의 창 없이 바로 재동기화
       const existing = getStoredGoogleToken();
-      const auth = existing && hasGrantedScope(scopeKey) ? existing : await requestGoogleToken(scopeKey);
+      const auth = existing && hasGrantedScope(scopeKey) && hasGoogleIdentityScopes()
+        ? existing
+        : await requestGoogleToken(scopeKey);
+      if (isFirebaseConfigured()) {
+        setFirestoreSyncEnabled(false);
+        try {
+          const firebaseUser = await connectFirebaseWithGoogle(auth.accessToken);
+          if (firebaseUser) await restoreCloudUser(firebaseUser.uid, firebaseUser.email);
+        } catch (firebaseError) {
+          console.error('[Firebase] Google 계정 연결 실패:', firebaseError);
+          setFirestoreSyncEnabled(true);
+          saveStoredAppData(storedDataRef.current);
+          setCloudSyncStatus('error');
+        }
+      }
       await syncGoogleService(scopeKey, auth.accessToken);
     } catch (err) {
       patchPlatform(scopeKey, { error: err instanceof Error ? err.message : 'Google 로그인에 실패했습니다.' });
     } finally {
       setSyncing(scopeKey, false);
     }
-  }, [syncGoogleService, patchPlatform]);
+  }, [syncGoogleService, patchPlatform, restoreCloudUser]);
 
   // 첫 방문 팝업은 별도 흐름 없이 데이터 연동 센터와 동일한 토글들을 그대로 재사용하고,
   // "확인"을 누르면(연동 여부와 무관하게) 다시 뜨지 않도록 표시만 남깁니다.
@@ -235,6 +350,7 @@ export default function App() {
   }, []);
 
   const handleDisconnectPlatform = useCallback((platformId: string) => {
+    setCloudScoreSnapshot(undefined);
     if (platformId === 'youtube' || platformId === 'drive') {
       revokeScope(platformId);
     }
@@ -254,6 +370,7 @@ export default function App() {
     const demo = DEMO_PLATFORM_DATA[platformId];
     if (!demo) return;
 
+    setCustomDnaScores(null);
     setPlatforms(prev => {
       const current = prev.find(p => p.id === platformId);
       const nextConnected = !current?.connected;
@@ -277,6 +394,7 @@ export default function App() {
 
   const handleUploadTakeout = useCallback((file: File) => {
     setSyncing('youtube', true);
+    setCustomDnaScores(null);
     parseYoutubeTakeoutFile(file)
       .then(items => {
         setPlatforms(prev => {
@@ -311,12 +429,14 @@ export default function App() {
   }, []);
 
   const handleCompleteOnboarding = useCallback((result: OnboardingResult) => {
+    setCloudScoreSnapshot(undefined);
     setCustomDnaScores(null); // 수동 조정값을 지우고 테스트 결과 기준으로 재분석
     setStoredData(prev => saveOnboardingResultToStore(result, prev));
     setIsOnboardingOpen(false);
   }, []);
 
   const handleSkipOnboarding = useCallback(() => {
+    setCloudScoreSnapshot(undefined);
     // 건너뛰어도 다시 묻지 않도록 완료 표시 (점수는 남기지 않음)
     setStoredData(prev =>
       saveOnboardingResultToStore({ completed: true, answers: {} }, prev)
@@ -355,6 +475,8 @@ export default function App() {
             onOpenSyncModal={() => setIsSyncModalOpen(true)}
             onUpdateDnaScores={handleUpdateDnaScores}
             onSelectMedia={item => setSelectedMedia(item)}
+            confidenceIntervals={scoreBreakdown.confidenceIntervals}
+            totalAnalyzed={scoreBreakdown.totalAnalyzed}
           />
         )}
 
@@ -366,7 +488,11 @@ export default function App() {
               trendResistance={trendResistance}
               firebaseEnabled={isFirebaseConfigured()}
               firebaseUid={firebaseUid}
+              firebaseEmail={firebaseEmail}
+              cloudSyncStatus={cloudSyncStatus}
               onRetakeTest={handleRetakeTest}
+              semanticStatus={semanticStatus}
+              semanticError={semanticError}
             />
           </div>
         )}

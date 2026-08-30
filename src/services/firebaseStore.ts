@@ -1,6 +1,7 @@
-import { ConsumedWork, OnboardingResult, PlatformConnection, StoredAppData } from '../types';
-import { DEFAULT_ARCHETYPE } from '../data/archetypesData';
+import { ConsumedWork, OnboardingResult, PlatformConnection, StoredAppData, TasteScoreBreakdown } from '../types';
+import { DEFAULT_ARCHETYPE, TASTE_ARCHETYPES } from '../data/archetypesData';
 import { ALL_MEDIA_ITEMS } from '../data/contentsData';
+import { scoreOnboardingAnswers } from '../data/onboardingQuestions';
 import { ensureAnonymousSignIn, getCurrentUid, isFirebaseConfigured, writeUserDoc } from './firebaseClient';
 
 /**
@@ -15,9 +16,8 @@ import { ensureAnonymousSignIn, getCurrentUid, isFirebaseConfigured, writeUserDo
  *
  * ★ 저장 정책 ★
  * - 회원 정보와 '추출된 분석 결과'만 Firestore에 저장합니다.
- * - YouTube 영상 제목, Drive 파일명 등 API 원본 데이터는 저장하지 않습니다.
- *   (해당 원본은 브라우저 메모리/localStorage에만 머무르고, tasteScoring.ts에서
- *    점수와 개수로 환산된 뒤 그 숫자만 서버로 올라갑니다.)
+ * - YouTube 영상 제목, Drive 파일명 등 API 원본 데이터는 Firestore에 저장하지 않습니다.
+ *   의미 분석이 켜진 경우 원문은 OpenRouter에서 임베딩 처리되지만 앱 서버에는 저장하지 않습니다.
  * - OAuth 액세스 토큰도 절대 저장하지 않습니다.
  * 실제 필터링은 아래 buildFirestorePayload()가 화이트리스트 방식으로 수행합니다.
  * ============================================================================
@@ -82,61 +82,17 @@ export const INITIAL_PLATFORMS: PlatformConnection[] = [
   },
 ];
 
-// 초기 시청/열람 작품 시드 데이터
-export const INITIAL_WATCHED_WORKS: ConsumedWork[] = [
-  {
-    id: 'watched-01',
-    mediaItemId: 'movie-01',
-    title: '애프터썬 (Aftersun)',
-    category: 'movie',
-    creator: '샬롯 웰스',
-    coverUrl: 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?auto=format&fit=crop&w=600&q=80',
-    userRating: 5,
-    reviewedAt: '2026-08-20',
-    sourcePlatform: '넷플릭스',
-    tags: ['#기억', '#새벽감성', '#가슴먹먹'],
-    userNote: '엔딩 크레딧 올라갈 때 눈물이 멈추지 않았다. 오랜만에 만난 인생 영화.',
-  },
-  {
-    id: 'watched-02',
-    mediaItemId: 'webtoon-01',
-    title: '숲속의 담',
-    category: 'webtoon',
-    creator: '다홍',
-    coverUrl: 'https://images.unsplash.com/photo-1511497584788-87676104235f?auto=format&fit=crop&w=600&q=80',
-    userRating: 5,
-    reviewedAt: '2026-08-25',
-    sourcePlatform: '네이버 웹툰',
-    tags: ['#철학적동화', '#따뜻한위로', '#색채미학'],
-    userNote: '양산형 웹툰 속에서 발견한 보물 같은 명작. 담이의 성장이 너무 아름다움.',
-  },
-  {
-    id: 'watched-03',
-    mediaItemId: 'book-01',
-    title: '우리가 빛의 속도로 갈 수 없다면',
-    category: 'book',
-    creator: '김초엽',
-    coverUrl: 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=600&q=80',
-    userRating: 5,
-    reviewedAt: '2026-08-15',
-    sourcePlatform: '리디북스',
-    tags: ['#SF소설', '#다정한시선', '#인생작'],
-    userNote: '우주라는 차가운 배경 속에서 사람의 그리움을 이렇게 따스하게 담아낼 수 있다니.',
-  },
-  {
-    id: 'watched-04',
-    mediaItemId: 'movie-04',
-    title: '소공녀',
-    category: 'movie',
-    creator: '전고운',
-    coverUrl: 'https://images.unsplash.com/photo-1517604931442-7e0c8ed2963c?auto=format&fit=crop&w=600&q=80',
-    userRating: 4,
-    reviewedAt: '2026-08-10',
-    sourcePlatform: '넷플릭스',
-    tags: ['#나만의취향', '#위스키', '#청춘'],
-    userNote: '남들이 뭐라 하든 나만의 취향과 존엄을 지키는 미소가 멋졌다.',
-  },
-];
+// 신규 사용자의 분석은 실제 연동/입력 데이터만 사용합니다.
+export const INITIAL_WATCHED_WORKS: ConsumedWork[] = [];
+
+// 이전 버전에서 실제 사용자 기록처럼 삽입했던 데모 항목 ID입니다.
+// 직접 추가한 기록은 다른 ID 형식을 사용하므로 이 목록만 제거해도 사용자 데이터는 보존됩니다.
+const LEGACY_SEED_WATCHED_IDS = new Set(['watched-01', 'watched-02', 'watched-03', 'watched-04']);
+const LEGACY_SEED_LIKED_IDS = new Set(['movie-01', 'webtoon-01', 'book-05', 'webtoon-06']);
+
+export function removeLegacySeedWatchedWorks(works: ConsumedWork[]): ConsumedWork[] {
+  return works.filter(work => !LEGACY_SEED_WATCHED_IDS.has(work.id));
+}
 
 export function generateUserId(): string {
   return 'user_pal_' + Math.random().toString(36).substring(2, 9) + '_' + Date.now().toString(36).substring(4);
@@ -163,6 +119,16 @@ export function loadStoredAppData(): StoredAppData {
       if (typeof parsed.welcomeDismissed !== 'boolean') {
         parsed.welcomeDismissed = false;
       }
+      if (Array.isArray(parsed.watchedWorks)) {
+        parsed.watchedWorks = removeLegacySeedWatchedWorks(parsed.watchedWorks);
+      }
+      if (
+        Array.isArray(parsed.likedWorkIds) &&
+        parsed.likedWorkIds.length === LEGACY_SEED_LIKED_IDS.size &&
+        parsed.likedWorkIds.every((id: string) => LEGACY_SEED_LIKED_IDS.has(id))
+      ) {
+        parsed.likedWorkIds = [];
+      }
       return parsed;
     }
   } catch (err) {
@@ -178,7 +144,7 @@ export function loadStoredAppData(): StoredAppData {
     watchedWorks: INITIAL_WATCHED_WORKS,
     // 4. 추천 작품 (Recommended Works)
     recommendedWorks: ALL_MEDIA_ITEMS.slice(0, 8),
-    likedWorkIds: ['movie-01', 'webtoon-01', 'book-05', 'webtoon-06'],
+    likedWorkIds: [],
     syncStatus: {
       youtube: false,
       drive: false,
@@ -222,6 +188,10 @@ export function buildFirestorePayload(data: StoredAppData, uid: string) {
           finalScores: data.scoreBreakdown.finalScores,
           totalAnalyzed: data.scoreBreakdown.totalAnalyzed,
           confidence: data.scoreBreakdown.confidence,
+          confidenceIntervals: data.scoreBreakdown.confidenceIntervals ?? null,
+          splitHalfReliability: data.scoreBreakdown.splitHalfReliability ?? null,
+          analysisEngine: data.scoreBreakdown.analysisEngine ?? 'keyword-fallback',
+          semanticModel: data.scoreBreakdown.semanticModel ?? null,
           sources: data.scoreBreakdown.sources.map(s => ({
             id: s.id,
             weight: s.weight,
@@ -264,12 +234,128 @@ export function buildFirestorePayload(data: StoredAppData, uid: string) {
   };
 }
 
+const RESTORED_SOURCE_LABELS: Record<string, string> = {
+  onboarding: '취향 테스트 응답',
+  watched: '내 보관함 감상 기록',
+  youtube: 'YouTube 좋아요',
+  drive: 'Google Drive 문서',
+  x: 'X 예시 데이터',
+  pinterest: 'Pinterest 예시 데이터',
+};
+
+function asRecord(value: unknown): Record<string, any> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, any>
+    : null;
+}
+
+/** Firestore 화이트리스트 문서를 앱 상태로 안전하게 복원합니다. */
+export function restoreStoredAppData(
+  local: StoredAppData,
+  payload: Record<string, unknown>,
+): StoredAppData {
+  const cloudUserType = asRecord(payload.userType);
+  const baseArchetype = cloudUserType?.id && TASTE_ARCHETYPES[cloudUserType.id]
+    ? TASTE_ARCHETYPES[cloudUserType.id]
+    : local.userType;
+
+  const cloudWatched = Array.isArray(payload.watchedWorks)
+    ? payload.watchedWorks.map(raw => {
+        const work = asRecord(raw);
+        if (!work || typeof work.id !== 'string' || typeof work.title !== 'string') return null;
+        const catalog = ALL_MEDIA_ITEMS.find(item => item.id === work.mediaItemId);
+        return {
+          id: work.id,
+          mediaItemId: typeof work.mediaItemId === 'string' ? work.mediaItemId : '',
+          title: work.title,
+          category: work.category === 'movie' || work.category === 'webtoon' ? work.category : 'book',
+          creator: typeof work.creator === 'string' ? work.creator : '',
+          coverUrl: catalog?.coverUrl ?? '',
+          userRating: typeof work.userRating === 'number' ? work.userRating : 0,
+          reviewedAt: typeof work.reviewedAt === 'string' ? work.reviewedAt : '',
+          sourcePlatform: typeof work.sourcePlatform === 'string' ? work.sourcePlatform : undefined,
+          tags: Array.isArray(work.tags) ? work.tags.filter((tag: unknown) => typeof tag === 'string') : [],
+        } as ConsumedWork;
+      }).filter((work): work is ConsumedWork => work !== null)
+    : local.watchedWorks;
+
+  const cloudOnboarding = asRecord(payload.onboarding);
+  const answers = asRecord(cloudOnboarding?.answers) ?? local.onboarding.answers;
+  const restoredOnboarding: OnboardingResult = cloudOnboarding
+    ? {
+        completed: Boolean(cloudOnboarding.completed),
+        completedAt: typeof cloudOnboarding.completedAt === 'string' ? cloudOnboarding.completedAt : undefined,
+        answers: Object.fromEntries(Object.entries(answers).filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
+      }
+    : local.onboarding;
+  if (restoredOnboarding.completed && Object.keys(restoredOnboarding.answers).length > 0) {
+    restoredOnboarding.scores = scoreOnboardingAnswers(restoredOnboarding.answers);
+  }
+
+  const cloudScore = asRecord(payload.scoreBreakdown);
+  let scoreBreakdown = local.scoreBreakdown;
+  if (cloudScore && asRecord(cloudScore.finalScores) && Array.isArray(cloudScore.sources)) {
+    scoreBreakdown = {
+      finalScores: cloudScore.finalScores,
+      totalAnalyzed: Number(cloudScore.totalAnalyzed) || 0,
+      confidence: Number(cloudScore.confidence) || 0,
+      confidenceIntervals: cloudScore.confidenceIntervals ?? undefined,
+      splitHalfReliability: typeof cloudScore.splitHalfReliability === 'number'
+        ? cloudScore.splitHalfReliability
+        : undefined,
+      analysisEngine: cloudScore.analysisEngine === 'semantic-embedding'
+        ? 'semantic-embedding'
+        : 'keyword-fallback',
+      semanticModel: typeof cloudScore.semanticModel === 'string' ? cloudScore.semanticModel : undefined,
+      sources: cloudScore.sources.map((raw: unknown) => {
+        const source = asRecord(raw) ?? {};
+        return {
+          ...source,
+          label: RESTORED_SOURCE_LABELS[source.id] ?? String(source.id ?? '복원 데이터'),
+        };
+      }),
+    } as TasteScoreBreakdown;
+  }
+
+  const recommendationIds = Array.isArray(payload.recommendedWorkIds) ? payload.recommendedWorkIds : [];
+  const restoredRecommendations = recommendationIds
+    .map(id => ALL_MEDIA_ITEMS.find(item => item.id === id))
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+
+  const hasLocalPlatformData = local.platformConnections.some(platform => platform.previewItems.length > 0);
+  const restoredPlatforms = hasLocalPlatformData ? local.platformConnections : INITIAL_PLATFORMS;
+
+  return {
+    ...local,
+    userIdentifier: typeof payload.localIdentifier === 'string'
+      ? payload.localIdentifier
+      : local.userIdentifier,
+    userType: {
+      ...baseArchetype,
+      trendResistanceScore: typeof cloudUserType?.trendResistanceScore === 'number'
+        ? cloudUserType.trendResistanceScore
+        : baseArchetype.trendResistanceScore,
+    },
+    watchedWorks: cloudWatched,
+    likedWorkIds: Array.isArray(payload.likedWorkIds)
+      ? payload.likedWorkIds.filter((id): id is string => typeof id === 'string')
+      : local.likedWorkIds,
+    recommendedWorks: restoredRecommendations.length > 0 ? restoredRecommendations : local.recommendedWorks,
+    onboarding: restoredOnboarding,
+    scoreBreakdown,
+    // 원본 플랫폼 항목은 Firestore에 저장하지 않으므로 다시 Google 동기화해야 합니다.
+    platformConnections: restoredPlatforms,
+    syncStatus: Object.fromEntries(restoredPlatforms.map(platform => [platform.id, platform.connected])),
+    welcomeDismissed: true,
+  };
+}
+
 /** Firestore 쓰기는 실패해도 앱 동작을 막지 않도록 조용히 처리 */
 async function syncToFirestore(data: StoredAppData): Promise<void> {
   if (!isFirebaseConfigured()) return;
   try {
     const user = await ensureAnonymousSignIn();
-    const uid = user?.uid ?? getCurrentUid();
+    const uid = getCurrentUid() ?? user?.uid;
     if (!uid) return;
 
     await writeUserDoc(uid, buildFirestorePayload(data, uid));
@@ -281,6 +367,16 @@ async function syncToFirestore(data: StoredAppData): Promise<void> {
 // 저장은 자주 일어나므로 쓰기를 묶어 Firestore 호출 횟수를 줄입니다.
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingData: StoredAppData | null = null;
+let firestoreSyncEnabled = false;
+
+export function setFirestoreSyncEnabled(enabled: boolean): void {
+  firestoreSyncEnabled = enabled;
+  if (!enabled && syncTimer) {
+    clearTimeout(syncTimer);
+    syncTimer = null;
+    pendingData = null;
+  }
+}
 
 export function saveStoredAppData(data: StoredAppData): void {
   try {
@@ -289,7 +385,7 @@ export function saveStoredAppData(data: StoredAppData): void {
     console.error('Failed to persist to localStorage', err);
   }
 
-  if (!isFirebaseConfigured()) return;
+  if (!isFirebaseConfigured() || !firestoreSyncEnabled) return;
 
   pendingData = data;
   if (syncTimer) clearTimeout(syncTimer);

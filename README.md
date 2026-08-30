@@ -55,8 +55,9 @@ Google 측 승인까지 철회합니다.
 
 YouTube 시청기록 전체(좋아요가 아닌 진짜 시청기록)는 API로 제공되지 않아, Google Takeout
 (takeout.google.com → YouTube 및 YouTube Music → 기록 → `watch-history.json`)에서 내려받은
-파일을 연동 센터에서 직접 업로드해 가져옵니다. 이 파일은 브라우저에서만 파싱되며 어디에도
-전송되지 않습니다.
+파일을 연동 센터에서 직접 업로드해 가져옵니다. 파일 자체는 브라우저에서만 파싱됩니다. AI 의미
+분석이 활성화된 경우 파일에서 추출된 영상 제목·채널명은 임베딩 생성을 위해 OpenRouter로
+전송될 수 있습니다.
 
 **X(트위터)**와 **Pinterest**는 실제 로그인 연동 대신 예시 데이터 토글로 제공합니다. 첫 방문 계정
 연동 팝업과 데이터 연동 센터 양쪽에서 다른 플랫폼과 동일한 토글 UI로 켜고 끌 수 있고, "데모" 배지로
@@ -70,15 +71,21 @@ YouTube 시청기록 전체(좋아요가 아닌 진짜 시청기록)는 API로 �
 
 ## Firebase 설정 (회원 정보 + 분석 점수 저장)
 
-회원가입 없이 **익명 인증**으로 uid를 발급받아 회원 정보와 분석 결과를 Firestore에 저장합니다.
-설정하지 않아도 앱은 localStorage 전용 모드로 정상 동작합니다.
+처음에는 **익명 인증**으로 uid를 발급하고, 사용자가 Google 플랫폼을 연결하면 같은 계정을
+Firebase Google 계정으로 승격합니다. 이후 다른 기기에서 같은 Google 계정을 연결하면
+Firestore의 유형·분석 결과·보관함·찜 목록을 복원합니다. 설정하지 않아도 앱은 localStorage
+전용 모드로 정상 동작합니다.
 
 1. https://console.firebase.google.com 에서 프로젝트 생성
 2. 프로젝트 설정 → 내 앱 → 웹(`</>`) 앱 등록 → `firebaseConfig` 값을 `.env.local`에 복사
-3. 빌드 → Authentication → 로그인 방법 → **익명** 사용 설정
+3. 빌드 → Authentication → 로그인 방법 → **익명**과 **Google** 사용 설정
 4. 빌드 → Firestore Database → 데이터베이스 만들기
+5. Authentication → Settings → 승인된 도메인에 Vercel 배포 도메인 추가
 
-### 저장 정책 — 원본은 저장하지 않고 추출 데이터만 저장
+Google Cloud OAuth에는 `openid`, `email`, `profile`이 API 권한과 함께 요청됩니다. OAuth 액세스
+토큰은 Firebase 자격증명 교환에만 사용하고 Firestore에는 저장하지 않습니다.
+
+### 저장 정책 — 원본은 Firebase에 저장하지 않고 추출 데이터만 저장
 
 | 저장함 (Firestore `users/{uid}`) | 저장하지 않음 |
 | --- | --- |
@@ -88,9 +95,22 @@ YouTube 시청기록 전체(좋아요가 아닌 진짜 시청기록)는 API로 �
 | 직접 등록한 감상 기록, 찜 목록 | OAuth 액세스 토큰 |
 | 플랫폼 연동 여부·건수 | 플랫폼 원본 항목(`previewItems`) |
 
-API 원본 데이터는 브라우저 안에서 `src/services/tasteScoring.ts`의 키워드 매칭을 거쳐
-**점수와 개수로만 환산**되고, 원본 문자열은 서버로 전송되지 않습니다. 실제 필터링은
-`buildFirestorePayload()`가 화이트리스트 방식으로 수행합니다 (`src/services/firebaseStore.ts`).
+AI 의미 분석이 켜져 있으면 제목·채널명은 같은 출처의 의미를 비교하기 위해 `/api/embed`를 거쳐
+OpenRouter 임베딩 API로 전송됩니다. 원문은 앱 서버나 Firestore에 저장하지 않으며, Firestore에는
+`buildFirestorePayload()`가 허용한 점수·개수만 저장합니다. OpenRouter 제공자의 데이터 처리 정책은
+선택한 모델에 따라 적용됩니다. API가 없거나 실패하면 기존 키워드 규칙으로 자동 폴백합니다.
+
+## OpenRouter 의미 분석 설정 (Vercel)
+
+Vercel 프로젝트 → Settings → Environment Variables에 아래 값을 추가한 뒤 재배포합니다.
+
+```env
+OPENROUTER_API_KEY=발급받은_키
+OPENROUTER_EMBED_MODEL=liquid/lfm-2.5-embedding-350m:free
+```
+
+키에는 `VITE_` 접두사를 붙이지 않습니다. 브라우저는 같은 도메인의 `/api/embed`만 호출하고,
+OpenRouter 키는 Vercel 서버 함수에서만 읽습니다.
 
 권장 Firestore 보안 규칙 — 본인 문서만 읽고 쓸 수 있게 제한하세요:
 
@@ -104,6 +124,9 @@ service cloud.firestore {
   }
 }
 ```
+
+같은 내용의 `firestore.rules` 파일도 저장소에 포함되어 있습니다. Firebase CLI를 사용하는 경우
+이 규칙을 배포하고, 그렇지 않으면 Firebase Console 규칙 편집기에 붙여넣어 게시하세요.
 
 ## 성향 분석 점수 시스템
 

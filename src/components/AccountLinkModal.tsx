@@ -75,6 +75,10 @@ export const AccountLinkModal: React.FC<AccountLinkModalProps> = ({
           ))}
         </div>
 
+        <p className="text-center text-xs font-semibold text-[#4A7C59]">
+          더 정확한 취향 분석을 위해 가급적 2개 이상의 데이터 소스를 선택해 주세요.
+        </p>
+
         <div className="p-4 bg-[#F5F1EB] rounded-2xl border border-[#EBE3D5] flex items-start space-x-3 text-xs text-[#4A4A4A]">
           <ShieldCheck className="w-5 h-5 text-[#4A7C59] shrink-0 mt-0.5" />
           <p>

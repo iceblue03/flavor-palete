@@ -23,6 +23,8 @@ export const GOOGLE_SCOPES = {
   drive: 'https://www.googleapis.com/auth/drive.metadata.readonly',
 } as const;
 
+const GOOGLE_IDENTITY_SCOPES = ['openid', 'email', 'profile'] as const;
+
 export type GoogleScopeKey = keyof typeof GOOGLE_SCOPES;
 
 interface StoredGoogleAuth {
@@ -106,6 +108,11 @@ export function hasGrantedScope(scopeKey: GoogleScopeKey): boolean {
   return !!stored?.grantedScopes.includes(GOOGLE_SCOPES[scopeKey]);
 }
 
+export function hasGoogleIdentityScopes(): boolean {
+  const stored = getStoredGoogleToken();
+  return !!stored && GOOGLE_IDENTITY_SCOPES.every(scope => stored.grantedScopes.includes(scope));
+}
+
 export function clearGoogleToken(): void {
   localStorage.removeItem(AUTH_STORAGE_KEY);
 }
@@ -153,6 +160,7 @@ export async function requestGoogleToken(
 
   const existing = getStoredGoogleToken();
   const requestedScopes = new Set<string>(existing?.grantedScopes ?? []);
+  GOOGLE_IDENTITY_SCOPES.forEach(scope => requestedScopes.add(scope));
   keys.forEach(k => requestedScopes.add(GOOGLE_SCOPES[k]));
 
   return new Promise((resolve, reject) => {

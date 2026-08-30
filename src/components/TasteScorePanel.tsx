@@ -1,13 +1,17 @@
 import React from 'react';
 import { Gauge, ShieldCheck, CloudOff, Cloud, RotateCcw } from 'lucide-react';
-import { TasteScoreBreakdown } from '../types';
+import { TasteAxisInterval, TasteScoreBreakdown } from '../types';
 
 interface TasteScorePanelProps {
   breakdown: TasteScoreBreakdown;
   trendResistance: number;
   firebaseEnabled: boolean;
   firebaseUid: string | null;
+  firebaseEmail?: string | null;
+  cloudSyncStatus?: 'loading' | 'synced' | 'error' | 'disabled';
   onRetakeTest: () => void;
+  semanticStatus?: 'idle' | 'loading' | 'ready' | 'fallback';
+  semanticError?: string | null;
 }
 
 const SOURCE_COLORS: Record<string, string> = {
@@ -24,9 +28,20 @@ export const TasteScorePanel: React.FC<TasteScorePanelProps> = ({
   trendResistance,
   firebaseEnabled,
   firebaseUid,
+  firebaseEmail,
+  cloudSyncStatus = 'disabled',
   onRetakeTest,
+  semanticStatus = 'idle',
+  semanticError,
 }) => {
   const { sources, confidence, totalAnalyzed } = breakdown;
+  const reliability = breakdown.splitHalfReliability ?? 0;
+  const averageMargin = breakdown.confidenceIntervals
+    ? Math.round((Object.values(breakdown.confidenceIntervals) as TasteAxisInterval[]).reduce(
+        (sum, interval) => sum + (interval.upper - interval.lower) / 2,
+        0,
+      ) / 6)
+    : 0;
 
   const confidenceLabel =
     confidence >= 75 ? '매우 높음' : confidence >= 50 ? '보통' : confidence >= 25 ? '낮음' : '데이터 부족';
@@ -64,6 +79,25 @@ export const TasteScorePanel: React.FC<TasteScorePanelProps> = ({
         </button>
       </div>
 
+      <div className={`rounded-2xl border px-4 py-3 text-xs ${
+        semanticStatus === 'ready'
+          ? 'bg-[#E8F3EB] border-[#84A98C]/40 text-[#4A7C59]'
+          : 'bg-[#F5F1EB] border-[#EBE3D5] text-[#7C7469]'
+      }`}>
+        <div className="font-bold">
+          {semanticStatus === 'ready' && 'AI 의미 분석 적용됨'}
+          {semanticStatus === 'loading' && 'AI가 연결 데이터를 의미 분석하는 중…'}
+          {semanticStatus === 'fallback' && '키워드 규칙으로 안전하게 분석 중'}
+          {semanticStatus === 'idle' && '플랫폼을 연결하면 AI 의미 분석이 시작됩니다'}
+        </div>
+        {semanticStatus === 'ready' && breakdown.semanticModel && (
+          <div className="mt-1 text-[10px] opacity-75 font-mono">{breakdown.semanticModel}</div>
+        )}
+        {semanticStatus === 'fallback' && semanticError && (
+          <div className="mt-1 text-[10px] text-[#A89F91]">{semanticError}</div>
+        )}
+      </div>
+
       {/* 상단 지표 2개 */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="p-4 bg-[#84A98C]/10 rounded-2xl border border-[#84A98C]/25">
@@ -96,7 +130,10 @@ export const TasteScorePanel: React.FC<TasteScorePanelProps> = ({
             />
           </div>
           <p className="text-[11px] text-[#7C7469] mt-2">
-            분석량(60) + 출처 다양성(20) + 신호 적중률(20)
+            분할 반분 r={reliability.toFixed(2)} · 축별 95% CI 평균 ±{averageMargin}점 · 표본 {totalAnalyzed}건
+          </p>
+          <p className="text-[10px] text-[#A89F91] mt-1">
+            신뢰도 = 양의 분할 반분 상관(50%) + CI 정밀도(30%) + 표본 충족도(20%)
           </p>
         </div>
       </div>
@@ -150,7 +187,11 @@ export const TasteScorePanel: React.FC<TasteScorePanelProps> = ({
             <CloudOff className="w-4 h-4 text-[#A89F91] shrink-0" />
           )}
           <span className="text-xs font-bold text-[#333333]">
-            {firebaseEnabled ? 'Firebase 저장 활성' : 'Firebase 미설정 — 이 기기에만 저장 중'}
+            {!firebaseEnabled && 'Firebase 미설정 — 이 기기에만 저장 중'}
+            {firebaseEnabled && cloudSyncStatus === 'loading' && '클라우드 데이터 확인 중…'}
+            {firebaseEnabled && cloudSyncStatus === 'error' && '클라우드 동기화 실패 — 로컬 저장 중'}
+            {firebaseEnabled && cloudSyncStatus === 'synced' && firebaseEmail && `Google 계정 동기화 · ${firebaseEmail}`}
+            {firebaseEnabled && cloudSyncStatus === 'synced' && !firebaseEmail && '익명 클라우드 백업 활성'}
           </span>
           {firebaseEnabled && firebaseUid && (
             <span className="text-[10px] font-mono text-[#A89F91] truncate">uid: {firebaseUid.slice(0, 10)}…</span>
@@ -160,9 +201,9 @@ export const TasteScorePanel: React.FC<TasteScorePanelProps> = ({
         <div className="flex items-start gap-2 text-[11px] text-[#4A4A4A] leading-relaxed">
           <ShieldCheck className="w-4 h-4 text-[#4A7C59] shrink-0 mt-0.5" />
           <p>
-            서버에는 <strong>회원 정보와 위 분석 점수(숫자)만</strong> 저장됩니다. YouTube 영상 제목,
-            Drive 파일명 같은 <strong>API 원본 데이터와 액세스 토큰은 저장하지 않습니다</strong> —
-            브라우저에서 점수로 환산된 뒤 그 수치만 전송됩니다.
+            Firebase에는 <strong>회원 정보와 위 분석 점수(숫자)만</strong> 저장됩니다. AI 의미 분석이
+            켜진 경우 제목·채널명은 임베딩 생성을 위해 OpenRouter로 전송되지만, 앱 서버와
+            Firebase에는 원문을 저장하지 않습니다. OAuth 액세스 토큰은 전송하지 않습니다.
           </p>
         </div>
       </div>

@@ -1,11 +1,12 @@
 import React from 'react';
-import { TasteDNAScores } from '../types';
+import { TasteConfidenceIntervals, TasteDNAScores } from '../types';
 
 interface TasteRadarChartProps {
   scores: TasteDNAScores;
   primaryColor?: string;
   secondaryColor?: string;
   size?: number;
+  confidenceIntervals?: TasteConfidenceIntervals;
 }
 
 export const TasteRadarChart: React.FC<TasteRadarChartProps> = ({
@@ -13,6 +14,7 @@ export const TasteRadarChart: React.FC<TasteRadarChartProps> = ({
   primaryColor = '#6366F1',
   secondaryColor = '#FB7185',
   size = 280,
+  confidenceIntervals,
 }) => {
   const center = size / 2;
   const radius = size * 0.38;
@@ -45,6 +47,13 @@ export const TasteRadarChart: React.FC<TasteRadarChartProps> = ({
   const polygonPoints = axes
     .map((axis, i) => {
       const { x, y } = getCoordinates(axis.value, i);
+      return `${x},${y}`;
+    })
+    .join(' ');
+  const intervalPoints = (bound: 'lower' | 'upper') => axes
+    .map((axis, i) => {
+      const interval = confidenceIntervals?.[axis.key as keyof TasteDNAScores];
+      const { x, y } = getCoordinates(interval?.[bound] ?? axis.value, i);
       return `${x},${y}`;
     })
     .join(' ');
@@ -109,6 +118,28 @@ export const TasteRadarChart: React.FC<TasteRadarChartProps> = ({
         })}
 
         {/* 메인 데이터 다각형 (Filled Polygon) */}
+        {confidenceIntervals && (
+          <>
+            <polygon
+              points={intervalPoints('upper')}
+              fill={primaryColor}
+              fillOpacity="0.13"
+              stroke={primaryColor}
+              strokeOpacity="0.35"
+              strokeWidth="1"
+              strokeDasharray="4 3"
+            />
+            <polygon
+              points={intervalPoints('lower')}
+              fill="#FBF9F5"
+              fillOpacity="0.7"
+              stroke={primaryColor}
+              strokeOpacity="0.25"
+              strokeWidth="1"
+              strokeDasharray="4 3"
+            />
+          </>
+        )}
         <polygon
           points={polygonPoints}
           fill="url(#radarGradient)"
@@ -161,7 +192,9 @@ export const TasteRadarChart: React.FC<TasteRadarChartProps> = ({
                 dominantBaseline="central"
                 className="text-[10px] font-semibold fill-[#4A7C59] select-none"
               >
-                {axis.value}점
+                {axis.value}점{confidenceIntervals
+                  ? ` ±${Math.round((confidenceIntervals[axis.key as keyof TasteDNAScores].upper - confidenceIntervals[axis.key as keyof TasteDNAScores].lower) / 2)}`
+                  : ''}
               </text>
             </g>
           );

@@ -97,16 +97,25 @@ export function deriveUserTasteDNA(watchedWorks: ConsumedWork[]): TasteDNAScores
 }
 
 /**
- * 취향 DNA 벡터를 기반으로 가장 근접한 8대 아키타입(사용자 유형) 결정
+ * 취향 DNA 벡터를 기반으로 가장 근접한 6개 아키타입(사용자 유형) 결정
  */
 export function determineUserArchetype(dna: TasteDNAScores): TasteArchetype {
-  let highestSimilarity = -1;
+  if ((Object.keys(dna) as (keyof TasteDNAScores)[]).every(axis => dna[axis] === 50)) {
+    return TASTE_ARCHETYPES['midnight-romantic'];
+  }
+  let shortestDistance = Number.POSITIVE_INFINITY;
   let bestArchetype: TasteArchetype = Object.values(TASTE_ARCHETYPES)[0];
 
   for (const archetype of Object.values(TASTE_ARCHETYPES)) {
-    const similarity = calculateCosineSimilarity(dna, archetype.dnaScores);
-    if (similarity > highestSimilarity) {
-      highestSimilarity = similarity;
+    // 모든 값이 양수인 0~100 벡터에 원점 코사인을 쓰면 공통 중립값(50)이
+    // 방향을 지배해 서로 다른 유형도 거의 같게 보입니다. 각 축을 동일한
+    // 척도로 비교하는 유클리드 거리로 실제 점수 위치에 가장 가까운 유형을 고릅니다.
+    const squaredDistance = (Object.keys(dna) as (keyof TasteDNAScores)[]).reduce(
+      (sum, axis) => sum + (dna[axis] - archetype.dnaScores[axis]) ** 2,
+      0,
+    );
+    if (squaredDistance < shortestDistance) {
+      shortestDistance = squaredDistance;
       bestArchetype = archetype;
     }
   }

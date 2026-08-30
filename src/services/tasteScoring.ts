@@ -8,6 +8,14 @@ import {
   TasteScoreSource,
 } from '../types';
 import { ALL_MEDIA_ITEMS } from '../data/contentsData';
+import { ONBOARDING_QUESTIONS } from '../data/onboardingQuestions';
+import {
+  bootstrapCI,
+  splitHalfReliability,
+  statisticalConfidence,
+  WeightedTasteSample,
+} from './analysis/statistics';
+import { SemanticAnalysisByPlatform } from './analysis/semanticTaste';
 
 /**
  * ============================================================================
@@ -17,10 +25,9 @@ import { ALL_MEDIA_ITEMS } from '../data/contentsData';
  * 6축 취향 DNA 점수로 환산하고, 가중 평균해 최종 점수를 냅니다.
  *
  * ★ 개인정보 설계 원칙 ★
- * 이 파일이 "추출(extraction) 경계"입니다. YouTube 영상 제목이나 Drive 파일명
- * 같은 원본 데이터는 여기서 키워드 매칭을 거쳐 '점수와 개수'로만 환산되고,
- * 원본 문자열은 이 함수 밖으로 나가지 않습니다. Firestore에는 이 파일이
- * 만들어낸 TasteScoreBreakdown(숫자)만 저장됩니다.
+ * Firestore에는 이 파일이 만들어낸 TasteScoreBreakdown(숫자)만 저장됩니다.
+ * 의미 분석이 활성화되면 원본 제목은 semanticTaste.ts를 통해 OpenRouter에서
+ * 임베딩으로 변환되며, 앱 서버와 Firestore에는 원문을 저장하지 않습니다.
  * ============================================================================
  */
 
@@ -214,18 +221,37 @@ export function computeTasteScore(input: {
   onboarding: OnboardingResult;
   watchedWorks: ConsumedWork[];
   platforms: PlatformConnection[];
+  semanticByPlatform?: SemanticAnalysisByPlatform;
 }): TasteScoreBreakdown {
   const sources: TasteScoreSource[] = [];
+  const statisticalSamples: WeightedTasteSample[] = [];
 
   if (input.onboarding.completed && input.onboarding.scores) {
+    const answerCount = Object.keys(input.onboarding.answers).length;
     sources.push({
       id: 'onboarding',
       label: SOURCE_LABELS.onboarding,
       weight: SOURCE_WEIGHTS.onboarding,
-      analyzedCount: Object.keys(input.onboarding.answers).length,
-      matchedCount: Object.keys(input.onboarding.answers).length,
+      analyzedCount: answerCount,
+      matchedCount: answerCount,
       scores: input.onboarding.scores,
     });
+    for (const [questionId, optionId] of Object.entries(input.onboarding.answers)) {
+      const option = ONBOARDING_QUESTIONS
+        .find(question => question.id === questionId)
+        ?.options.find(candidate => candidate.id === optionId);
+      if (!option) continue;
+      const answerScores = { ...NEUTRAL };
+      for (const axis of Object.keys(option.effects) as (keyof TasteDNAScores)[]) {
+        // 온보딩 점수는 선택 효과의 합이므로 평균 시 원 산식이 복원되도록 N배합니다.
+        answerScores[axis] += (option.effects[axis] ?? 0) * answerCount;
+      }
+      statisticalSamples.push({
+        scores: answerScores,
+        weight: SOURCE_WEIGHTS.onboarding / Math.max(1, answerCount),
+        group: 'onboarding',
+      });
+    }
   }
 
   if (input.watchedWorks.length > 0) {
@@ -238,6 +264,16 @@ export function computeTasteScore(input: {
       matchedCount,
       scores,
     });
+    const watchedSignalRatio = 0.5 + 0.5 * (matchedCount / input.watchedWorks.length);
+    const ratingTotal = input.watchedWorks.reduce((sum, work) => sum + Math.max(1, work.userRating), 0);
+    for (const work of input.watchedWorks) {
+      const itemResult = extractScoresFromWatchedWorks([work]);
+      statisticalSamples.push({
+        scores: itemResult.scores,
+        weight: SOURCE_WEIGHTS.watched * watchedSignalRatio * Math.max(1, work.userRating) / ratingTotal,
+        group: 'watched',
+      });
+    }
   }
 
   for (const platform of input.platforms) {
@@ -245,7 +281,10 @@ export function computeTasteScore(input: {
     const id = platform.id as TasteScoreSource['id'];
     if (!(id in SOURCE_WEIGHTS)) continue;
 
-    const { scores, matchedCount } = extractScoresFromItems(platform.previewItems);
+    const ruleResult = extractScoresFromItems(platform.previewItems);
+    const semantic = input.semanticByPlatform?.[platform.id];
+    const scores = semantic ? blendScores(semantic.scores, ruleResult.scores) : ruleResult.scores;
+    const matchedCount = semantic ? platform.previewItems.length : ruleResult.matchedCount;
     sources.push({
       id,
       label: SOURCE_LABELS[id],
@@ -254,6 +293,26 @@ export function computeTasteScore(input: {
       matchedCount,
       scores,
     });
+    const platformSignalRatio = semantic ? 1 : 0.5 + 0.5 * (matchedCount / platform.previewItems.length);
+    const contributionScale = Math.sqrt(platform.previewItems.length);
+    for (const item of platform.previewItems) {
+      const itemResult = extractScoresFromItems([item]);
+      let contributionScores: TasteDNAScores;
+      const semanticItemScore = semantic?.itemScores[item.id];
+      if (semanticItemScore) {
+        contributionScores = blendScores(semanticItemScore, itemResult.scores);
+      } else {
+        contributionScores = { ...NEUTRAL };
+        for (const axis of Object.keys(contributionScores) as (keyof TasteDNAScores)[]) {
+          contributionScores[axis] = NEUTRAL[axis] + (itemResult.scores[axis] - NEUTRAL[axis]) * contributionScale;
+        }
+      }
+      statisticalSamples.push({
+        scores: contributionScores,
+        weight: SOURCE_WEIGHTS[id] * platformSignalRatio / platform.previewItems.length,
+        group: id,
+      });
+    }
   }
 
   // 데이터가 하나도 없으면 중립값
@@ -283,15 +342,34 @@ export function computeTasteScore(input: {
   });
 
   const totalAnalyzed = sources.reduce((acc, s) => acc + s.analyzedCount, 0);
-  const totalMatched = sources.reduce((acc, s) => acc + s.matchedCount, 0);
+  const confidenceIntervals = bootstrapCI(statisticalSamples, 200);
+  const reliability = splitHalfReliability(statisticalSamples);
+  const confidence = statisticalConfidence(reliability, confidenceIntervals, totalAnalyzed);
 
-  // 신뢰도: 분석량(최대 60점) + 출처 다양성(최대 20점) + 신호 적중률(최대 20점)
-  const volumeScore = Math.min(60, Math.round((totalAnalyzed / 40) * 60));
-  const diversityScore = Math.min(20, sources.length * 5);
-  const signalScore = totalAnalyzed > 0 ? Math.round((totalMatched / totalAnalyzed) * 20) : 0;
-  const confidence = Math.min(100, volumeScore + diversityScore + signalScore);
+  return {
+    finalScores,
+    sources,
+    totalAnalyzed,
+    confidence,
+    confidenceIntervals,
+    splitHalfReliability: Math.round(reliability * 100) / 100,
+    analysisEngine: Object.keys(input.semanticByPlatform ?? {}).length > 0
+      ? 'semantic-embedding'
+      : 'keyword-fallback',
+    semanticModel: Object.values(input.semanticByPlatform ?? {})[0]?.model,
+  };
+}
 
-  return { finalScores, sources, totalAnalyzed, confidence };
+function blendScores(
+  semantic: TasteDNAScores,
+  rules: TasteDNAScores,
+  semanticWeight = 0.85,
+): TasteDNAScores {
+  const blended = {} as TasteDNAScores;
+  for (const axis of Object.keys(semantic) as (keyof TasteDNAScores)[]) {
+    blended[axis] = clamp(semantic[axis] * semanticWeight + rules[axis] * (1 - semanticWeight));
+  }
+  return blended;
 }
 
 /** 6축 점수로부터 '유행 탈피 & 독립 취향 지수' 산출 */

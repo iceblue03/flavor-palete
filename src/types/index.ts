@@ -9,6 +9,13 @@ export interface TasteDNAScores {
   worldbuilding: number;  // 세계관/몰입도 (0-100)
 }
 
+export interface TasteAxisInterval {
+  lower: number;
+  upper: number;
+}
+
+export type TasteConfidenceIntervals = Record<keyof TasteDNAScores, TasteAxisInterval>;
+
 export interface TasteArchetype {
   id: string;
   name: string;
@@ -129,8 +136,14 @@ export interface TasteScoreBreakdown {
   finalScores: TasteDNAScores;
   sources: TasteScoreSource[];
   totalAnalyzed: number;
-  /** 데이터가 많고 신호가 뚜렷할수록 높아지는 분석 신뢰도 (0-100) */
+  /** 분할 반분 신뢰도, 신뢰구간 폭, 표본 수로 산출한 분석 신뢰도 (0-100) */
   confidence: number;
+  /** 항목 복원추출 200회의 축별 95% 신뢰구간 */
+  confidenceIntervals?: TasteConfidenceIntervals;
+  /** 50/50 무작위 분할에서 얻은 두 점수 벡터의 피어슨 상관 (-1~1) */
+  splitHalfReliability?: number;
+  analysisEngine?: 'semantic-embedding' | 'keyword-fallback';
+  semanticModel?: string;
 }
 
 /** 온보딩 취향 테스트 결과 (선택한 보기 ID만 저장) */
